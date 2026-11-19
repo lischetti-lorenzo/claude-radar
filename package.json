@@ -1,0 +1,18 @@
+{
+  "name": "claude-radar",
+  "version": "1.0.0",
+  "description": "Floating macOS widget + local dashboard to keep track of all your Claude Code agents across VS Code windows",
+  "main": "src/main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "server": "node src/server.js",
+    "setup": "node scripts/install-hooks.js",
+    "uninstall-hooks": "node scripts/uninstall-hooks.js",
+    "demo": "node scripts/simulate.js"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0"
+  },
+  "license": "UNLICENSED"
+}

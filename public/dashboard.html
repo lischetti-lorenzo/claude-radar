@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Claude Radar</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='none' stroke='%23A78BFA' stroke-width='3'/></svg>">
+<style>
+  :root {
+    --bg: #0B0B10; --card: #13131A; --card2: #181822; --line: rgba(255,255,255,.07); --line2: rgba(255,255,255,.12);
+    --txt: #ECECF1; --mut: #8E8EA0; --dim: #5D5D6E;
+    --q: #FBBF24; --perm: #FB923C; --ok: #4ADE80; --work: #93C5FD;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--txt); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; min-height: 100vh; }
+  body::before { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: -1;
+    background: radial-gradient(600px 300px at 10% -5%, rgba(167,139,250,.13), transparent 70%), radial-gradient(500px 260px at 90% -10%, rgba(96,165,250,.10), transparent 70%); }
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+  svg { width: 15px; height: 15px; display: block; }
+  .wrap { max-width: 1320px; margin: 0 auto; padding: 28px 32px 60px; }
+
+  header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 26px; }
+  .brand { display: flex; align-items: center; gap: 11px; }
+  .logo { width: 26px; height: 26px; border-radius: 50%; position: relative; background: conic-gradient(from 200deg, #A78BFA, #60A5FA, #34D399, #F472B6, #A78BFA); }
+  .logo::after { content: ""; position: absolute; inset: 6px; border-radius: 50%; background: var(--bg); }
+  h1 { font-size: 20px; font-weight: 700; letter-spacing: -.2px; }
+  .conn { font-size: 12px; color: var(--mut); display: flex; align-items: center; gap: 6px; }
+  .conn i { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .conn.off i { background: var(--perm); box-shadow: 0 0 8px var(--perm); }
+
+  .stats { display: flex; gap: 10px; margin-left: auto; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 8px 14px; min-width: 104px; }
+  .stat .n { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .stat .l { font-size: 11.5px; color: var(--mut); }
+  .stat.q .n { color: var(--q); } .stat.w .n { color: var(--work); } .stat.d .n { color: var(--ok); }
+
+  .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 22px; flex-wrap: wrap; }
+  .tabs { display: flex; gap: 2px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 3px; }
+  .tab { padding: 5px 12px; border-radius: 7px; font-size: 13px; color: var(--mut); font-weight: 550; }
+  .tab.on { background: rgba(255,255,255,.09); color: var(--txt); }
+  .tab .c { font-size: 11px; color: var(--dim); margin-left: 4px; }
+  .search { flex: 1; min-width: 180px; max-width: 320px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 7px 12px; color: var(--txt); font: inherit; font-size: 13px; outline: none; }
+  .search:focus { border-color: var(--line2); }
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 9px; font-size: 13px; font-weight: 550; background: var(--card); border: 1px solid var(--line); color: var(--mut); }
+  .btn:hover { color: var(--txt); border-color: var(--line2); }
+  .ml { margin-left: auto; }
+
+  section { margin-bottom: 30px; }
+  .sh { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
+  .sh h2 { font-size: 15px; font-weight: 650; }
+  .sh .path { font-size: 12px; color: var(--dim); font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .sh .mini { font-size: 12px; color: var(--mut); }
+  .sh.att h2 { color: var(--q); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 12px; align-items: start; }
+
+  .agent { --c: #A78BFA; position: relative; background: linear-gradient(180deg, var(--card2), var(--card)); border: 1px solid var(--line); border-radius: 16px; padding: 16px 16px 14px 19px; overflow: hidden; }
+  .agent::before { content: ""; position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px; border-radius: 0 3px 3px 0; background: var(--c); box-shadow: 0 0 14px var(--c); }
+  .agent.question { border-color: rgba(251,191,36,.35); box-shadow: 0 0 0 1px rgba(251,191,36,.08), 0 10px 40px -10px rgba(251,191,36,.18); }
+  .agent.permission { border-color: rgba(251,146,60,.35); box-shadow: 0 10px 40px -10px rgba(251,146,60,.18); }
+  .agent.ended { opacity: .55; }
+  .r1 { display: flex; gap: 11px; align-items: center; }
+  .av { width: 34px; height: 34px; border-radius: 10px; background: var(--c); color: #0e0e14; display: grid; place-items: center; font-weight: 750; font-size: 13px; flex: none; }
+  .tt { flex: 1; min-width: 0; }
+  .title { font-weight: 650; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sub { color: var(--mut); font-size: 12.5px; display: flex; gap: 6px; align-items: center; white-space: nowrap; overflow: hidden; }
+  .sub .p { color: var(--c); font-weight: 600; } .sub svg { width: 12px; height: 12px; }
+  .pill { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 99px; font-size: 12px; font-weight: 650; }
+  .pill svg { width: 13px; height: 13px; }
+  .pill.working { color: var(--work); background: rgba(147,197,253,.10); }
+  .pill.question { color: #1a1406; background: var(--q); }
+  .pill.permission { color: #1a0f06; background: var(--perm); }
+  .pill.done { color: var(--ok); background: rgba(74,222,128,.12); }
+  .pill.idle, .pill.ended { color: var(--mut); background: rgba(255,255,255,.06); }
+  .spin { width: 10px; height: 10px; border-radius: 50%; border: 1.8px solid currentColor; border-right-color: transparent; animation: spin .9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .meta { display: flex; gap: 14px; margin-top: 12px; font-size: 12.5px; color: var(--mut); flex-wrap: wrap; }
+  .meta b { color: var(--txt); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .now { margin-top: 10px; padding: 9px 11px; border-radius: 10px; background: rgba(255,255,255,.03); border: 1px solid var(--line); font-size: 13px; color: var(--mut); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tool-l { color: var(--txt); font-weight: 600; }
+  .tool-d { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+  .stale { color: var(--perm); }
+
+  .prompt { margin-top: 10px; font-size: 12.5px; color: var(--mut); }
+  .prompt span { color: #C9C9D6; }
+  .label { font-size: 10.5px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; color: var(--dim); margin: 12px 0 6px; }
+
+  .qbox { margin-top: 12px; padding: 12px 14px; border-radius: 12px; background: rgba(251,191,36,.06); border: 1px solid rgba(251,191,36,.2); }
+  .qh { font-size: 10.5px; font-weight: 750; letter-spacing: .6px; text-transform: uppercase; color: var(--q); }
+  .qq { font-weight: 650; font-size: 14.5px; margin: 3px 0 10px; }
+  .opts { display: grid; gap: 6px; }
+  .opt { display: flex; gap: 10px; padding: 8px 10px; border-radius: 9px; background: rgba(0,0,0,.25); border: 1px solid var(--line); font-size: 13px; }
+  .opt b { flex: none; width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; font-size: 11px; background: rgba(255,255,255,.08); color: var(--mut); }
+  .opt .od { color: var(--mut); font-size: 12px; }
+  .qmulti { font-size: 11px; color: var(--mut); margin-bottom: 6px; }
+  .qsep { height: 14px; }
+  .perm { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; background: rgba(0,0,0,.3); border-radius: 8px; padding: 8px 10px; word-break: break-all; color: #F3DCC6; }
+  .permbox { background: rgba(251,146,60,.06); border-color: rgba(251,146,60,.22); }
+  .permbox .qh { color: var(--perm); }
+
+  .md { font-size: 13px; color: #C9C9D6; line-height: 1.55; }
+  .md code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; background: rgba(255,255,255,.07); padding: 1px 5px; border-radius: 5px; }
+  .md pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; background: rgba(0,0,0,.35); border: 1px solid var(--line); padding: 10px; border-radius: 8px; overflow-x: auto; margin: 6px 0; white-space: pre; }
+  .md .li { display: block; padding-left: 14px; position: relative; } .md .li::before { content: "•"; position: absolute; left: 3px; color: var(--dim); }
+  .md .h { display: block; color: var(--txt); margin-top: 4px; }
+  .clamp { max-height: 160px; overflow: hidden; position: relative; }
+  .clamp::after { content: ""; position: absolute; inset: auto 0 0 0; height: 50px; background: linear-gradient(transparent, var(--card)); }
+  .more { margin-top: 6px; font-size: 12px; color: var(--mut); text-decoration: underline; text-underline-offset: 3px; }
+  .more:hover { color: var(--txt); }
+
+  .tl { margin-top: 4px; border-left: 1px solid var(--line2); margin-left: 4px; padding-left: 12px; display: grid; gap: 5px; }
+  .ev { position: relative; font-size: 12px; color: var(--mut); display: flex; gap: 8px; }
+  .ev::before { content: ""; position: absolute; left: -15.5px; top: 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--dim); }
+  .ev.question::before, .ev.permission::before { background: var(--q); } .ev.done::before { background: var(--ok); } .ev.prompt::before { background: var(--c); }
+  .ev .t { flex: none; color: var(--dim); font-variant-numeric: tabular-nums; width: 40px; }
+  .ev .x { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ev.prompt .x { color: #C9C9D6; }
+
+  .foot { display: flex; gap: 8px; margin-top: 14px; align-items: center; }
+  .cta { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 9px; font-size: 12.5px; font-weight: 600; background: rgba(255,255,255,.08); }
+  .cta:hover { background: rgba(255,255,255,.14); }
+  .cta.primary { background: var(--q); color: #1a1406; } .cta.primary:hover { filter: brightness(1.08); }
+  .ghost { color: var(--mut); font-size: 12.5px; padding: 6px 8px; border-radius: 8px; } .ghost:hover { color: var(--txt); background: rgba(255,255,255,.05); }
+
+  .empty { text-align: center; padding: 90px 20px; color: var(--mut); }
+  .empty h3 { color: var(--txt); font-size: 18px; margin-bottom: 6px; }
+  .empty code { font-family: ui-monospace, "SF Mono", Menlo, monospace; background: var(--card); padding: 2px 6px; border-radius: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand"><div class="logo"></div><h1>Claude Radar</h1></div>
+    <div class="conn" id="conn"><i></i><span>En vivo</span></div>
+    <div class="stats" id="stats"></div>
+  </header>
+  <div class="toolbar">
+    <div class="tabs" id="tabs"></div>
+    <input class="search" id="q" placeholder="Buscar proyecto o sesión…">
+    <button class="btn ml" id="clear">Limpiar terminados</button>
+  </div>
+  <div id="root"></div>
+</div>
+
+<script src="/shared.js"></script>
+<script>
+const R = window.Radar, { esc, ICONS } = R;
+const $ = (id) => document.getElementById(id);
+let state = { agents: [] }, filter = location.hash.slice(1) || 'all', query = '';
+const open = new Set(), openTl = new Set();
+
+const FILTERS = [['all', 'Todos'], ['att', 'Necesitan atención'], ['working', 'Trabajando'], ['done', 'Terminados']];
+const fmtT = (t) => new Date(t).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false });
+const initials = (t) => { const w = String(t || '?').replace(/[^\p{L}\p{N} ]/gu, ' ').trim().split(/\s+/); return ((w[0] || '?')[0] + (w[1] ? w[1][0] : '')).toUpperCase(); };
+
+function pill(a) {
+  const st = R.STATUS[a.status] || R.STATUS.idle;
+  const ic = a.status === 'working' ? '<span class="spin"></span>' : a.status === 'question' ? ICONS.q : a.status === 'permission' ? ICONS.lock : a.status === 'done' ? ICONS.check : '';
+  return `<span class="pill ${st.cls}">${ic}${st.label}</span>`;
+}
+
+function question(a) {
+  if (a.status === 'question' && a.question) {
+    if (a.question.kind === 'plan') return `<div class="qbox"><div class="qh">Plan listo para aprobar</div><div class="md" style="margin-top:6px">${R.md(a.question.plan)}</div></div>`;
+    return `<div class="qbox">${a.question.questions.map((q) => `
+      ${q.header ? `<div class="qh">${esc(q.header)}</div>` : ''}
+      <div class="qq">${esc(q.question)}</div>
+      ${q.multiSelect ? '<div class="qmulti">Podés elegir varias</div>' : ''}
+      <div class="opts">${q.options.map((o, i) => `<div class="opt"><b>${i + 1}</b><div>${esc(o.label)}${o.description ? `<div class="od">${esc(o.description)}</div>` : ''}</div></div>`).join('')}</div>`).join('<div class="qsep"></div>')}
+    </div>`;
+  }
+  if (a.status === 'permission' && a.permission) {
+    const t = a.permission.tool;
+    return `<div class="qbox permbox"><div class="qh">${esc(t ? t.label : 'Permiso')}</div><div class="qq">${esc(a.permission.message || 'Necesita tu aprobación')}</div>${t && t.detail ? `<div class="perm">${esc(t.detail)}</div>` : ''}</div>`;
+  }
+  return '';
+}
+
+function card(a, now) {
+  const stale = a.status === 'working' && now - a.updatedAt > 5 * 60e3;
+  let nowLine = '';
+  if (a.status === 'working') nowLine = `<div class="now">${a.tool ? R.toolLine(a) : '<span class="tool-l">Pensando…</span>'}${stale ? ` <span class="stale">· sin señales hace ${R.ago(a.updatedAt, now)}</span>` : ''}</div>`;
+  const metas = [];
+  if (a.status === 'working') metas.push(`<span>Trabajando hace <b>${R.dur(a.taskStartedAt || a.startedAt, now)}</b></span>`);
+  if (a.status === 'done') metas.push(`<span>Terminó hace <b>${R.ago(a.doneAt, now)}</b></span>`);
+  if (R.needsYou(a)) metas.push(`<span>Esperándote hace <b>${R.ago((a.question || a.permission)?.at || a.updatedAt, now)}</b></span>`);
+  metas.push(`<span><b>${a.toolCount || 0}</b> acciones</span>`);
+  metas.push(`<span>Sesión desde las <b>${fmtT(a.startedAt)}</b></span>`);
+
+  const isOpen = open.has(a.id);
+  const last = a.lastMessage && (a.status === 'done' || a.status === 'idle')
+    ? `<div class="label">Última respuesta</div><div class="md ${isOpen || a.lastMessage.length <= 400 ? '' : 'clamp'}">${R.md(a.lastMessage)}</div>${a.lastMessage.length > 400 ? `<button class="more" data-more="${a.id}">${isOpen ? 'Ver menos' : 'Ver todo'}</button>` : ''}` : '';
+  const prompt = a.lastPrompt ? `<div class="prompt">Tu último pedido: <span>${esc(a.lastPrompt.length > 220 ? a.lastPrompt.slice(0, 220) + '…' : a.lastPrompt)}</span></div>` : '';
+  const tlOpen = openTl.has(a.id);
+  const evs = (a.events || []).slice(tlOpen ? -40 : -5).reverse();
+  const tl = evs.length ? `<div class="label">Actividad</div><div class="tl">${evs.map((e) => `<div class="ev ${e.type}"><span class="t">${fmtT(e.t)}</span><span class="x">${esc(e.text)}</span></div>`).join('')}</div>${(a.events || []).length > 5 ? `<button class="more" data-tl="${a.id}">${tlOpen ? 'Ver menos' : 'Ver toda la actividad'}</button>` : ''}` : '';
+
+  return `<article class="agent ${a.status}" style="--c:${R.color(a)}">
+    <div class="r1"><div class="av">${esc(initials(a.title || a.project))}</div>
+      <div class="tt"><div class="title" title="${esc(a.title)}">${esc(a.title || 'Sesión nueva')}</div>
+        <div class="sub"><span class="p">${esc(a.project)}</span>${a.sub ? `<span>/ ${esc(a.sub)}</span>` : ''}${a.worktree ? `<span title="worktree">· wt ${esc(a.worktree)}</span>` : ''}${a.branch ? `<span>·</span>${ICONS.branch}<span>${esc(a.branch)}</span>` : ''}</div></div>
+      ${pill(a)}</div>
+    <div class="meta">${metas.join('')}</div>
+    ${nowLine}${question(a)}${prompt}${last}${tl}
+    <div class="foot">
+      <button class="cta ${R.needsYou(a) ? 'primary' : ''}" data-open="${a.id}">${ICONS.code}${R.needsYou(a) ? 'Responder en VS Code' : 'Abrir en VS Code'}</button>
+      ${a.status !== 'working' && !R.needsYou(a) ? `<button class="ghost ml" data-dismiss="${a.id}">Quitar</button>` : ''}
+    </div>
+  </article>`;
+}
+
+function render() {
+  const now = Date.now();
+  const all = state.agents;
+  const nQ = all.filter(R.needsYou).length, nW = all.filter((a) => a.status === 'working').length, nD = all.filter((a) => a.status === 'done').length;
+  document.title = (nQ ? `(${nQ}) ` : '') + 'Claude Radar';
+  $('stats').innerHTML = `<div class="stat q"><div class="n">${nQ}</div><div class="l">te esperan</div></div>
+    <div class="stat w"><div class="n">${nW}</div><div class="l">trabajando</div></div>
+    <div class="stat d"><div class="n">${nD}</div><div class="l">terminados</div></div>
+    <div class="stat"><div class="n">${new Set(all.map((a) => a.root || a.cwd)).size}</div><div class="l">proyectos</div></div>`;
+  const counts = { all: all.length, att: nQ, working: nW, done: nD };
+  $('tabs').innerHTML = FILTERS.map(([k, l]) => `<button class="tab ${filter === k ? 'on' : ''}" data-f="${k}">${l}<span class="c">${counts[k]}</span></button>`).join('');
+
+  let list = all.filter((a) => filter === 'all' || (filter === 'att' ? R.needsYou(a) : a.status === filter));
+  if (query) list = list.filter((a) => (a.project + ' ' + a.title + ' ' + a.branch).toLowerCase().includes(query));
+
+  if (!all.length) {
+    $('root').innerHTML = `<div class="empty"><h3>No hay agentes activos</h3>Abrí <code>claude</code> en cualquier proyecto y va a aparecer acá al instante.</div>`;
+    return;
+  }
+  if (!list.length) { $('root').innerHTML = `<div class="empty"><h3>Nada por acá</h3>No hay agentes con este filtro.</div>`; return; }
+
+  let html = '';
+  const att = list.filter(R.needsYou);
+  if (att.length && filter === 'all') {
+    html += `<section><div class="sh att"><h2>Te están esperando</h2><span class="mini">${att.length}</span></div><div class="grid">${att.map((a) => card(a, now)).join('')}</div></section>`;
+    list = list.filter((a) => !R.needsYou(a));
+  }
+  for (const g of R.groupByProject(list)) {
+    html += `<section><div class="sh"><h2>${esc(g.name)}</h2><span class="path">${esc(g.key)}</span><span class="mini">· ${g.agents.length} ${g.agents.length === 1 ? 'agente' : 'agentes'}</span></div>
+      <div class="grid">${g.agents.map((a) => card(a, now)).join('')}</div></section>`;
+  }
+  $('root').innerHTML = html;
+}
+
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('button'); if (!t) return;
+  if (t.dataset.f) { filter = t.dataset.f; location.hash = filter; render(); }
+  if (t.dataset.open) R.api('/api/open', { id: t.dataset.open });
+  if (t.dataset.dismiss) R.api('/api/dismiss', { id: t.dataset.dismiss });
+  if (t.dataset.more) { open.has(t.dataset.more) ? open.delete(t.dataset.more) : open.add(t.dataset.more); render(); }
+  if (t.dataset.tl) { openTl.has(t.dataset.tl) ? openTl.delete(t.dataset.tl) : openTl.add(t.dataset.tl); render(); }
+});
+$('q').addEventListener('input', (e) => { query = e.target.value.toLowerCase().trim(); render(); });
+$('clear').onclick = () => R.api('/api/clear-done');
+
+R.stream((s) => { state = s; $('conn').classList.remove('off'); $('conn').lastElementChild.textContent = 'En vivo'; render(); },
+  (ok) => { if (!ok) { $('conn').classList.add('off'); $('conn').lastElementChild.textContent = 'Reconectando…'; } });
+setInterval(render, 5000);
+</script>
+</body>
+</html>
