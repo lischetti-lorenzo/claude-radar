@@ -289,20 +289,43 @@ function psTable() {
 
 const isShell = (cmd) => /^(\S*\/)?-?(sh|bash|zsh|dash|fish)$/.test(String(cmd).split(' ')[0]);
 /* The command the user sees, out of Claude's wrapper: `… && eval '<command>' < /dev/null && pwd -P >| …` */
-function shellCommand(cmd) {
+function shellCommand(cmd, fallback) {
   const m = cmd.match(/\beval '((?:[^']|'"'"')*)'/);
-  return clip(m ? m[1].replace(/'"'"'/g, "'") : cmd, 90);
+  if (!m) return fallback || 'Comando';
+  // ps shows control characters as octal escapes (\012 = newline)
+  return clip(m[1].replace(/'"'"'/g, "'").replace(/\\0\d\d/g, ' '), 90);
+}
+
+/* Fallback for sessions whose hooks don't send the PID (started before `npm run setup`):
+   Claude Code writes <configDir>/sessions/<pid>.json with the process' current sessionId. */
+const ACCOUNT_DIRS = loadAccounts().accounts.map((x) => x.dir);
+function sessionPids(table) {
+  const map = new Map();
+  for (const dir of ACCOUNT_DIRS) {
+    let files = [];
+    try { files = fs.readdirSync(path.join(dir, 'sessions')).filter((f) => /^\d+\.json$/.test(f)); } catch { continue; }
+    for (const f of files) {
+      const pid = parseInt(f, 10);
+      if (!table.has(pid)) continue; // stale file from a process that's gone
+      try {
+        const o = JSON.parse(fs.readFileSync(path.join(dir, 'sessions', f), 'utf8'));
+        if (o.sessionId) map.set(o.sessionId, pid);
+      } catch { /* being rewritten */ }
+    }
+  }
+  return map;
 }
 
 /* Bash commands running under the agent's claude process, or null if the process is gone. */
 function runningFor(a, table) {
+  if (!a.pid) return null;
   let pid = a.pid;
   // in case the hook ran through an intermediate shell, climb to the claude process
   for (let i = 0; i < 4 && table.has(pid) && isShell(table.get(pid).cmd); i++) pid = table.get(pid).ppid;
   if (!table.has(pid)) return null;
   const out = [];
   for (const [child, pr] of table) {
-    if (pr.ppid === pid && pr.cmd.includes('shell-snapshots') && !pr.cmd.includes(MARK)) out.push({ pid: child, cmd: shellCommand(pr.cmd) });
+    if (pr.ppid === pid && pr.cmd.includes('shell-snapshots') && !pr.cmd.includes(MARK)) out.push({ pid: child, cmd: shellCommand(pr.cmd, a.lastBash) });
   }
   return out;
 }
@@ -317,16 +340,30 @@ function finishTurn(a, now) {
 }
 
 function pollRunning() {
-  const watch = [...agents.values()].filter((x) => x.pid && x.status !== 'ended' && (x.bg || x.running.length || (x.status === 'working' && x.tool?.name === 'Bash')));
+  // done sessions are watched too: one may have ended its turn with a command still running
+  const watch = [...agents.values()].filter((x) => x.status !== 'ended' && (x.status === 'done' || x.bg || x.running.length || (x.status === 'working' && x.tool?.name === 'Bash')));
   if (!watch.length) return;
   const table = psTable();
   if (!table) return;
+  if (watch.some((x) => !x.pid || !table.has(x.pid))) {
+    const byId = sessionPids(table);
+    for (const x of watch) if (byId.has(x.id)) x.pid = byId.get(x.id);
+  }
   const now = Date.now();
   let changed = false;
   for (const a of watch) {
     const r = runningFor(a, table);
     const running = r || [];
     if (running.map((x) => x.pid).join() !== a.running.map((x) => x.pid).join()) { a.running = running; changed = true; }
+    if (a.status === 'done' && running.length) {
+      // marked done (e.g. before Radar knew its PID) but a command is still running
+      a.status = 'working'; a.bg = true; a.bgEmptyAt = 0;
+      a.tool = bgTool(running);
+      addEvent(a, 'note', 'Esperando un proceso: ' + a.tool.detail);
+      bus.emit('transition', { agent: a, from: 'done', to: 'working' });
+      changed = true;
+      continue;
+    }
     if (!a.bg) continue;
     if (running.length) {
       a.bgEmptyAt = 0;
@@ -351,9 +388,10 @@ setInterval(pollRunning, POLL_MS).unref();
 
 /* Synchronous check used when Claude says it's done: are there commands left running? */
 function stillRunning(a) {
-  if (!a.pid) return [];
   const table = psTable();
-  const r = table && runningFor(a, table);
+  if (!table) return [];
+  if (!a.pid || !table.has(a.pid)) a.pid = sessionPids(table).get(a.id) || a.pid;
+  const r = runningFor(a, table);
   a.running = r || [];
   return a.running;
 }
@@ -417,6 +455,7 @@ function handleHook(p, meta = {}) {
         if (a.status !== 'working') { a.status = 'working'; if (!a.taskStartedAt || prev === 'done' || prev === 'idle') a.taskStartedAt = now; }
         a.question = null; a.permission = null;
         a.tool = summarizeTool(name, input, a.cwd);
+        if (name === 'Bash') a.lastBash = a.tool.detail;
         a.toolCount++;
         addEvent(a, 'tool', a.tool.label + (a.tool.detail ? ' · ' + a.tool.detail : ''));
       }
