@@ -34,7 +34,7 @@ Claude sessions that were already running show up once you restart them.
 | --- | --- |
 | Switch project | **‹ ›** buttons or the arrow keys. Yellow dots mark projects with pending questions. |
 | Open a project in VS Code | Click an agent card |
-| Full dashboard | **⤢** button, or open <http://127.0.0.1:7337> |
+| Full dashboard | **⤢** button, or open <http://127.0.0.1:7337>. Cards of each project are shown side by side; switch to a wrapping grid with the layout toggle next to the search box |
 | Collapse the widget | **–** button |
 | Settings (notifications, sound, launch at login, reset position) | **⋯** button, or right-click ◉ in the menu bar |
 | Show / hide the widget | **⌘⌥⇧R**, or click ◉ in the menu bar |

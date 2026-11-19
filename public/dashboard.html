@@ -17,7 +17,7 @@
     background: radial-gradient(600px 300px at 10% -5%, rgba(167,139,250,.13), transparent 70%), radial-gradient(500px 260px at 90% -10%, rgba(96,165,250,.10), transparent 70%); }
   button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
   svg { width: 15px; height: 15px; display: block; }
-  .wrap { max-width: 1320px; margin: 0 auto; padding: 28px 32px 60px; }
+  .wrap { max-width: 1680px; margin: 0 auto; padding: 28px 32px 60px; }
 
   header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 26px; }
   .brand { display: flex; align-items: center; gap: 11px; }
@@ -51,7 +51,14 @@
   .sh .path { font-size: 12px; color: var(--dim); font-family: ui-monospace, "SF Mono", Menlo, monospace; }
   .sh .mini { font-size: 12px; color: var(--mut); }
   .sh.att h2 { color: var(--q); }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 12px; align-items: start; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; align-items: start; }
+  /* default layout: each project's cards in a single row, side by side (scrolls horizontally if they don't fit) */
+  .row .grid { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(340px, 380px); overflow-x: auto; padding: 4px 4px 10px; margin: -4px -4px 0; scroll-snap-type: x proximity; }
+  .row .grid > .agent { scroll-snap-align: start; }
+  .grid::-webkit-scrollbar { height: 8px; } .grid::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 4px; }
+  .layout { display: flex; gap: 2px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 3px; }
+  .layout button { width: 30px; height: 26px; display: grid; place-items: center; border-radius: 7px; color: var(--mut); }
+  .layout button.on { background: rgba(255,255,255,.09); color: var(--txt); }
 
   .agent { --c: #A78BFA; position: relative; background: linear-gradient(180deg, var(--card2), var(--card)); border: 1px solid var(--line); border-radius: 16px; padding: 16px 16px 14px 19px; overflow: hidden; }
   .agent::before { content: ""; position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px; border-radius: 0 3px 3px 0; background: var(--c); box-shadow: 0 0 14px var(--c); }
@@ -137,7 +144,11 @@
   <div class="toolbar">
     <div class="tabs" id="tabs"></div>
     <input class="search" id="q" placeholder="Buscar proyecto o sesión…">
-    <button class="btn ml" id="clear">Limpiar terminados</button>
+    <div class="layout ml" id="layout" title="Disposición de las tarjetas">
+      <button data-layout="row" title="Lado a lado"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="3" width="3.6" height="10" rx="1"/><rect x="6.2" y="3" width="3.6" height="10" rx="1"/><rect x="10.9" y="3" width="3.6" height="10" rx="1"/></svg></button>
+      <button data-layout="grid" title="Grilla"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg></button>
+    </div>
+    <button class="btn" id="clear">Limpiar terminados</button>
   </div>
   <div id="root"></div>
 </div>
@@ -148,6 +159,12 @@ const R = window.Radar, { esc, ICONS } = R;
 const $ = (id) => document.getElementById(id);
 let state = { agents: [] }, filter = location.hash.slice(1) || 'all', query = '';
 const open = new Set(), openTl = new Set();
+let layout = 'row';
+try { layout = localStorage.getItem('radar.layout') === 'grid' ? 'grid' : 'row'; } catch {}
+function applyLayout() {
+  $('root').classList.toggle('row', layout === 'row');
+  for (const b of $('layout').querySelectorAll('button')) b.classList.toggle('on', b.dataset.layout === layout);
+}
 
 const FILTERS = [['all', 'Todos'], ['att', 'Necesitan atención'], ['working', 'Trabajando'], ['done', 'Terminados']];
 const fmtT = (t) => new Date(t).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -245,6 +262,7 @@ function render() {
 
 document.addEventListener('click', (e) => {
   const t = e.target.closest('button'); if (!t) return;
+  if (t.dataset.layout) { layout = t.dataset.layout; try { localStorage.setItem('radar.layout', layout); } catch {} applyLayout(); }
   if (t.dataset.f) { filter = t.dataset.f; location.hash = filter; render(); }
   if (t.dataset.open) R.api('/api/open', { id: t.dataset.open });
   if (t.dataset.dismiss) R.api('/api/dismiss', { id: t.dataset.dismiss });
@@ -252,6 +270,7 @@ document.addEventListener('click', (e) => {
   if (t.dataset.tl) { openTl.has(t.dataset.tl) ? openTl.delete(t.dataset.tl) : openTl.add(t.dataset.tl); render(); }
 });
 $('q').addEventListener('input', (e) => { query = e.target.value.toLowerCase().trim(); render(); });
+applyLayout();
 $('clear').onclick = () => R.api('/api/clear-done');
 
 R.stream((s) => { state = s; $('conn').classList.remove('off'); $('conn').lastElementChild.textContent = 'En vivo'; render(); },
