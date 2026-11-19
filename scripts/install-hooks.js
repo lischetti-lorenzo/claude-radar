@@ -9,10 +9,23 @@ const FILE = path.join(os.homedir(), '.claude', 'settings.json');
 const MARK = 'claude-radar';
 const CMD = `curl -s -m 2 -X POST -H 'Content-Type: application/json' --data-binary @- 'http://127.0.0.1:${PORT}/hook?src=${MARK}' >/dev/null 2>&1 || true`;
 
-// events with a tool matcher vs. events without one
+/* Questions (AskUserQuestion) can be answered from the widget/dashboard: this hook waits until you answer there
+   (or pick "answer in the terminal"). If Radar isn't running, curl fails at once and Claude asks in the terminal as usual. */
+const ASK_WAIT = 3600; // seconds; after that the question falls back to the terminal
+const ASK_CMD = `curl -s -m ${ASK_WAIT} -X POST -H 'Content-Type: application/json' --data-binary @- 'http://127.0.0.1:${PORT}/hook/ask?src=${MARK}' 2>/dev/null || true`;
+
+const notify = { type: 'command', command: CMD, timeout: 5 };
+// event -> hook groups to add (matcher only for tool events)
 const EVENTS = {
-  SessionStart: null, UserPromptSubmit: null, PreToolUse: '*', PostToolUse: '*',
-  Notification: null, Stop: null, SubagentStop: null, PreCompact: null, SessionEnd: null,
+  SessionStart: [{ hooks: [notify] }],
+  UserPromptSubmit: [{ hooks: [notify] }],
+  PreToolUse: [{ matcher: '*', hooks: [notify] }, { matcher: 'AskUserQuestion', hooks: [{ type: 'command', command: ASK_CMD, timeout: ASK_WAIT + 5 }] }],
+  PostToolUse: [{ matcher: '*', hooks: [notify] }],
+  Notification: [{ hooks: [notify] }],
+  Stop: [{ hooks: [notify] }],
+  SubagentStop: [{ hooks: [notify] }],
+  PreCompact: [{ hooks: [notify] }],
+  SessionEnd: [{ hooks: [notify] }],
 };
 
 let settings = {};
@@ -26,13 +39,11 @@ if (fs.existsSync(FILE)) {
 } else fs.mkdirSync(path.dirname(FILE), { recursive: true });
 
 settings.hooks = settings.hooks || {};
-for (const [ev, matcher] of Object.entries(EVENTS)) {
+for (const [ev, groups] of Object.entries(EVENTS)) {
   const list = (settings.hooks[ev] || [])
     .map((g) => ({ ...g, hooks: (g.hooks || []).filter((h) => !String(h.command || '').includes(MARK)) }))
     .filter((g) => g.hooks.length);
-  const entry = { hooks: [{ type: 'command', command: CMD, timeout: 5 }] };
-  if (matcher) entry.matcher = matcher;
-  list.push(entry);
+  list.push(...groups);
   settings.hooks[ev] = list;
 }
 
