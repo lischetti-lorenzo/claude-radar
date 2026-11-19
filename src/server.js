@@ -9,8 +9,9 @@ const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
 const os = require('os');
-const { execFile } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
 const { EventEmitter } = require('events');
+const { loadAccounts } = require('./accounts');
 
 const PORT = Number(process.env.RADAR_PORT) || 7337;
 const DATA_DIR = path.join(os.homedir(), '.claude-radar');
@@ -19,6 +20,8 @@ const PUBLIC = path.join(__dirname, '..', 'public');
 const PALETTE_SIZE = 10;
 const ENDED_TTL = 60 * 1000;
 const MAX_EVENTS = 60;
+const MARK = 'claude-radar';
+const ACCOUNTS = loadAccounts().accounts.map((a) => ({ name: a.name, command: a.command }));
 
 const SETTINGS_FILE = path.join(DATA_DIR, 'server-settings.json');
 
@@ -48,6 +51,7 @@ function load() {
         const r = findRoot(a.cwd);
         Object.assign(a, { root: r.root, repo: r.repo, sub: r.sub, worktree: r.worktree, project: path.basename(r.root) || a.project });
       }
+      a.running = a.running || [];
       agents.set(a.id, a);
     }
   } catch { /* first run */ }
@@ -252,12 +256,110 @@ function newAgent(p) {
     permission: null,
     lastMessage: '',
     transcriptPath: p.transcript_path || '',
+    account: '',
+    pid: 0,          // Claude Code process (from the hooks)
+    running: [],     // Bash commands still running in this session
+    bg: false,       // the turn ended but a command keeps running
+    bgEmptyAt: 0,
     events: [],
   };
 }
 
+/* ---------------- commands still running ----------------
+   Claude Code runs every Bash command (foreground or run_in_background) in a shell that sources its shell
+   snapshot (`zsh -c source ~/.claude/shell-snapshots/…`), as a child of the claude process. The hooks send
+   that process' PID ($PPID), so `ps` tells us whether a session is still waiting on a command even after
+   its turn ended. */
+const CAN_PS = process.platform === 'darwin' || process.platform === 'linux';
+const POLL_MS = 3000;
+const BG_GRACE = 15 * 1000; // after the last command exits, give Claude this long to pick the turn back up
+
+function psTable() {
+  if (!CAN_PS) return null;
+  try {
+    const out = execFileSync('ps', ['-axww', '-o', 'pid=,ppid=,command='], { encoding: 'utf8', maxBuffer: 64 << 20, timeout: 3000 });
+    const table = new Map();
+    for (const line of out.split('\n')) {
+      const m = line.match(/^\s*(\d+)\s+(\d+)\s(.*)$/);
+      if (m) table.set(+m[1], { ppid: +m[2], cmd: m[3] });
+    }
+    return table;
+  } catch { return null; }
+}
+
+const isShell = (cmd) => /^(\S*\/)?-?(sh|bash|zsh|dash|fish)$/.test(String(cmd).split(' ')[0]);
+/* The command the user sees, out of Claude's wrapper: `… && eval '<command>' < /dev/null && pwd -P >| …` */
+function shellCommand(cmd) {
+  const m = cmd.match(/\beval '((?:[^']|'"'"')*)'/);
+  return clip(m ? m[1].replace(/'"'"'/g, "'") : cmd, 90);
+}
+
+/* Bash commands running under the agent's claude process, or null if the process is gone. */
+function runningFor(a, table) {
+  let pid = a.pid;
+  // in case the hook ran through an intermediate shell, climb to the claude process
+  for (let i = 0; i < 4 && table.has(pid) && isShell(table.get(pid).cmd); i++) pid = table.get(pid).ppid;
+  if (!table.has(pid)) return null;
+  const out = [];
+  for (const [child, pr] of table) {
+    if (pr.ppid === pid && pr.cmd.includes('shell-snapshots') && !pr.cmd.includes(MARK)) out.push({ pid: child, cmd: shellCommand(pr.cmd) });
+  }
+  return out;
+}
+
+const bgTool = (running) => ({ name: 'Bash', label: 'En segundo plano', detail: running[0].cmd + (running.length > 1 ? ` (+${running.length - 1})` : '') });
+
+function finishTurn(a, now) {
+  a.status = 'done';
+  a.doneAt = now;
+  a.bg = false; a.bgEmptyAt = 0;
+  a.tool = null; a.question = null; a.permission = null;
+}
+
+function pollRunning() {
+  const watch = [...agents.values()].filter((x) => x.pid && x.status !== 'ended' && (x.bg || x.running.length || (x.status === 'working' && x.tool?.name === 'Bash')));
+  if (!watch.length) return;
+  const table = psTable();
+  if (!table) return;
+  const now = Date.now();
+  let changed = false;
+  for (const a of watch) {
+    const r = runningFor(a, table);
+    const running = r || [];
+    if (running.map((x) => x.pid).join() !== a.running.map((x) => x.pid).join()) { a.running = running; changed = true; }
+    if (!a.bg) continue;
+    if (running.length) {
+      a.bgEmptyAt = 0;
+      const t = bgTool(running);
+      if (t.detail !== a.tool?.detail) { a.tool = t; changed = true; }
+    } else if (r === null || (a.bgEmptyAt && now - a.bgEmptyAt > BG_GRACE)) {
+      // Claude didn't come back after the command ended (or the session is gone): the turn is over
+      finishTurn(a, now);
+      addEvent(a, 'done', 'Terminó');
+      bus.emit('transition', { agent: a, from: 'working', to: 'done' });
+      readTranscript(a, { last: true });
+      changed = true;
+    } else if (!a.bgEmptyAt) {
+      a.bgEmptyAt = now;
+      a.tool = { name: 'Bash', label: 'Proceso terminado', detail: 'esperando que Claude siga…' };
+      changed = true;
+    }
+  }
+  if (changed) emit();
+}
+setInterval(pollRunning, POLL_MS).unref();
+
+/* Synchronous check used when Claude says it's done: are there commands left running? */
+function stillRunning(a) {
+  if (!a.pid) return [];
+  const table = psTable();
+  const r = table && runningFor(a, table);
+  a.running = r || [];
+  return a.running;
+}
+
 /* ---------------- hook handling ---------------- */
-function handleHook(p) {
+function handleHook(p, meta = {}) {
   const id = p.session_id;
   const ev = p.hook_event_name;
   if (!id || !ev) return;
@@ -272,6 +374,10 @@ function handleHook(p) {
   }
   const prev = a.status;
   a.updatedAt = now;
+  if (meta.account) a.account = meta.account;
+  if (meta.pid) a.pid = meta.pid;
+  // Claude is back on this session's main turn: it's no longer just waiting on a command
+  if (ev === 'UserPromptSubmit' || ev === 'PreToolUse' || ev === 'Stop' || ev === 'SessionEnd') { a.bg = false; a.bgEmptyAt = 0; }
   // the turn moved on without going through Radar: let go of any blocked question
   if (ev === 'UserPromptSubmit' || ev === 'Stop' || ev === 'SessionEnd') releaseToTerminal(id);
   if (p.transcript_path) a.transcriptPath = p.transcript_path;
@@ -336,21 +442,31 @@ function handleHook(p) {
           addEvent(a, 'permission', a.permission.message || 'Pide permiso');
         }
       } else if (nt === 'idle_prompt') {
-        if (a.status !== 'question' && a.status !== 'permission' && a.status !== 'done') { a.status = 'done'; a.doneAt = a.doneAt || now; }
+        // idle at the prompt but with a command still running (e.g. run_in_background): not done yet
+        if (a.status !== 'question' && a.status !== 'permission' && a.status !== 'done' && !a.bg && !stillRunning(a).length) { a.status = 'done'; a.doneAt = a.doneAt || now; }
       } else if (msg) {
         addEvent(a, 'note', msg);
       }
       break;
     }
 
-    case 'Stop':
-      a.status = 'done';
-      a.doneAt = now;
-      a.tool = null; a.question = null; a.permission = null;
+    case 'Stop': {
       if (p.last_assistant_message) a.lastMessage = String(p.last_assistant_message).slice(0, 6000);
-      addEvent(a, 'done', 'Terminó');
       readTranscript(a, { last: !p.last_assistant_message });
+      const running = stillRunning(a);
+      if (running.length) {
+        // the turn ended but a command keeps running: Claude picks it up again when the command finishes
+        a.status = 'working';
+        a.bg = true;
+        a.question = null; a.permission = null;
+        a.tool = bgTool(running);
+        addEvent(a, 'note', 'Esperando un proceso: ' + a.tool.detail);
+      } else {
+        finishTurn(a, now);
+        addEvent(a, 'done', 'Terminó');
+      }
       break;
+    }
 
     case 'SubagentStop':
       addEvent(a, 'subagent', 'Un subagente terminó');
@@ -362,7 +478,7 @@ function handleHook(p) {
 
     case 'SessionEnd':
       a.status = 'ended';
-      a.question = null; a.permission = null; a.tool = null;
+      a.question = null; a.permission = null; a.tool = null; a.running = [];
       addEvent(a, 'end', 'Sesión cerrada');
       setTimeout(() => {
         const cur = agents.get(id);
@@ -378,7 +494,7 @@ function handleHook(p) {
 /* ---------------- answering questions from Radar ---------------- */
 /* Called by the blocking AskUserQuestion hook. The response is held open until the user answers
    from the widget/dashboard (or chooses the terminal); the hook prints whatever we send back. */
-function holdQuestion(p, res) {
+function holdQuestion(p, res, meta) {
   const id = p.session_id;
   if (!id || p.tool_name !== 'AskUserQuestion' || !settings.answerInRadar) { res.writeHead(200); return res.end(); }
   releaseToTerminal(id); // a newer question replaces an older one
@@ -388,7 +504,7 @@ function holdQuestion(p, res) {
   res.on('close', () => { // Claude cancelled the tool call or the hook timed out
     if (pending.get(id) === entry) { pending.delete(id); emit(); }
   });
-  handleHook(p);
+  handleHook(p, meta);
 }
 
 function releaseToTerminal(id) {
@@ -439,6 +555,7 @@ function snapshot() {
   return {
     now: Date.now(),
     settings,
+    accounts: ACCOUNTS,
     agents: [...agents.values()].map(({ transcriptPath, ...rest }) => ({ ...rest, answerable: pending.has(rest.id) && rest.status === 'question' })),
   };
 }
@@ -481,6 +598,13 @@ function json(res, code, obj) {
   res.end(JSON.stringify(obj));
 }
 
+/* ?account=<name>&pid=<claude pid> added by the hooks (older hooks send neither) */
+function hookMeta(url) {
+  const pid = Number(url.searchParams.get('pid'));
+  const account = String(url.searchParams.get('account') || '').replace(/[^\w.-]/g, '').slice(0, 24);
+  return { pid: Number.isInteger(pid) && pid > 1 ? pid : 0, account };
+}
+
 const server = http.createServer(async (req, res) => {
   // Prevent DNS rebinding: only accept localhost
   const host = (req.headers.host || '').split(':')[0];
@@ -491,12 +615,12 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/hook/ask') {
       let p;
       try { p = JSON.parse(await readBody(req)); } catch { res.writeHead(200); return res.end(); }
-      return holdQuestion(p, res);
+      return holdQuestion(p, res, hookMeta(url));
     }
     if (req.method === 'POST' && url.pathname === '/hook') {
       const body = await readBody(req);
       res.writeHead(200); res.end(); // respond fast, with no output for Claude
-      try { handleHook(JSON.parse(body)); } catch { /* invalid payload */ }
+      try { handleHook(JSON.parse(body), hookMeta(url)); } catch { /* invalid payload */ }
       return;
     }
     if (url.pathname === '/api/state') return json(res, 200, snapshot());

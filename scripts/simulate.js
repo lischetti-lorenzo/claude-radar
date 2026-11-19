@@ -2,16 +2,16 @@
 /* Demo: simulates several agents across projects to see the widget in action. */
 const http = require('http');
 const PORT = Number(process.env.RADAR_PORT) || 7337;
-const send = (p) => new Promise((r) => {
-  const req = http.request({ host: '127.0.0.1', port: PORT, path: '/hook', method: 'POST', headers: { 'Content-Type': 'application/json' } }, (res) => { res.resume(); res.on('end', r); });
+const send = (p, account = 'claude') => new Promise((r) => {
+  const req = http.request({ host: '127.0.0.1', port: PORT, path: '/hook?account=' + account, method: 'POST', headers: { 'Content-Type': 'application/json' } }, (res) => { res.resume(); res.on('end', r); });
   req.on('error', () => { console.error('✗ No hay servidor en el puerto ' + PORT + '. Corré `npm start` primero.'); process.exit(1); });
   req.end(JSON.stringify(p));
 });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const S = (id, cwd) => (ev, extra = {}) => send({ session_id: 'demo-' + id, cwd, transcript_path: '', hook_event_name: ev, ...extra });
+const S = (id, cwd, account) => (ev, extra = {}) => send({ session_id: 'demo-' + id, cwd, transcript_path: '', hook_event_name: ev, ...extra }, account);
 
 (async () => {
-  const a = S('a', '/demo/subqdocs'), b = S('b', '/demo/subqdocs'), c = S('c', '/demo/trading-bot'), d = S('d', '/demo/bonapp'), e = S('e', '/demo/scriba');
+  const a = S('a', '/demo/subqdocs'), b = S('b', '/demo/subqdocs'), c = S('c', '/demo/trading-bot'), d = S('d', '/demo/bonapp', 'trabajo'), e = S('e', '/demo/scriba');
   for (const f of [a, b, c, d, e]) await f('SessionStart', { source: 'startup' });
   await a('UserPromptSubmit', { prompt: 'Refactor del módulo de autenticación con JWT' });
   await a('PreToolUse', { tool_name: 'Edit', tool_input: { file_path: '/demo/subqdocs/src/auth/jwt.ts' } });

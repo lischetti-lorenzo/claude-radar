@@ -71,6 +71,7 @@
   .title { font-weight: 650; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sub { color: var(--mut); font-size: 12.5px; display: flex; gap: 6px; align-items: center; white-space: nowrap; overflow: hidden; }
   .sub .p { color: var(--c); font-weight: 600; } .sub svg { width: 12px; height: 12px; }
+  .acct { flex: none; font-size: 11px; font-weight: 650; letter-spacing: .02em; padding: 0 6px; line-height: 18px; border-radius: 5px; color: var(--mut); border: 1px solid rgba(255,255,255,.14); }
   .pill { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 99px; font-size: 12px; font-weight: 650; }
   .pill svg { width: 13px; height: 13px; }
   .pill.working { color: var(--work); background: rgba(147,197,253,.10); }
@@ -207,7 +208,7 @@ function question(a) {
 }
 
 function card(a, now) {
-  const stale = a.status === 'working' && now - a.updatedAt > 5 * 60e3;
+  const stale = R.isStale(a, now);
   let nowLine = '';
   if (a.status === 'working') nowLine = `<div class="now">${a.tool ? R.toolLine(a) : '<span class="tool-l">Pensando…</span>'}${stale ? ` <span class="stale">· sin señales hace ${R.ago(a.updatedAt, now)}</span>` : ''}</div>`;
   const metas = [];
@@ -228,7 +229,7 @@ function card(a, now) {
   return `<article class="agent ${a.status}" style="--c:${R.color(a)}">
     <div class="r1"><div class="av">${esc(initials(a.title || a.project))}</div>
       <div class="tt"><div class="title" title="${esc(a.title)}">${esc(a.title || 'Sesión nueva')}</div>
-        <div class="sub"><span class="p">${esc(a.project)}</span>${a.sub ? `<span>/ ${esc(a.sub)}</span>` : ''}${a.worktree ? `<span title="worktree">· wt ${esc(a.worktree)}</span>` : ''}${a.branch ? `<span>·</span>${ICONS.branch}<span>${esc(a.branch)}</span>` : ''}</div></div>
+        <div class="sub">${R.accountTag(a, state)}<span class="p">${esc(a.project)}</span>${a.sub ? `<span>/ ${esc(a.sub)}</span>` : ''}${a.worktree ? `<span title="worktree">· wt ${esc(a.worktree)}</span>` : ''}${a.branch ? `<span>·</span>${ICONS.branch}<span>${esc(a.branch)}</span>` : ''}</div></div>
       ${pill(a)}</div>
     <div class="meta">${metas.join('')}</div>
     ${nowLine}${question(a)}${prompt}${last}${tl}
@@ -253,7 +254,7 @@ function render() {
   $('tabs').innerHTML = FILTERS.map(([k, l]) => `<button class="tab ${filter === k ? 'on' : ''}" data-f="${k}">${l}<span class="c">${counts[k]}</span></button>`).join('');
 
   let list = all.filter((a) => filter === 'all' || (filter === 'att' ? R.needsYou(a) : a.status === filter));
-  if (query) list = list.filter((a) => (a.project + ' ' + a.title + ' ' + a.branch).toLowerCase().includes(query));
+  if (query) list = list.filter((a) => (a.project + ' ' + a.title + ' ' + a.branch + ' ' + (a.account || '')).toLowerCase().includes(query));
 
   if (!all.length) {
     $('root').innerHTML = `<div class="empty"><h3>No hay agentes activos</h3>Abrí <code>claude</code> en cualquier proyecto y va a aparecer acá al instante.</div>`;

@@ -200,6 +200,19 @@
     }
   }
 
+  /* "no signal for a while" — unless a command is still running, which is a perfectly good reason to be quiet */
+  const isStale = (a, now = Date.now()) => a.status === 'working' && !(a.running && a.running.length) && now - a.updatedAt > 5 * 60e3;
+
+  /* Account chip, only when more than one Claude account is configured or seen */
+  function accountTag(a, state) {
+    if (!a.account) return '';
+    const names = new Set((state.accounts || []).map((x) => x.name));
+    for (const x of state.agents || []) if (x.account) names.add(x.account);
+    if (names.size < 2) return '';
+    const cmd = (state.accounts || []).find((x) => x.name === a.account)?.command;
+    return `<span class="acct" title="${esc(cmd ? `Cuenta ${a.account} (${cmd})` : `Cuenta ${a.account}`)}">${esc(a.account)}</span>`;
+  }
+
   const api = (p, body) => fetch(p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
 
   function toolLine(a) {
@@ -207,5 +220,5 @@
     return `<span class="tool-l">${esc(a.tool.label)}</span>${a.tool.detail ? ` <span class="tool-d">${esc(a.tool.detail)}</span>` : ''}`;
   }
 
-  window.Radar = { PALETTE, STATUS, ICONS, esc, ago, dur, md, color, needsYou, groupByProject, stream, api, toolLine, answerForm, bindAnswers, keepFocus };
+  window.Radar = { PALETTE, STATUS, ICONS, esc, ago, dur, md, color, needsYou, groupByProject, stream, api, toolLine, isStale, accountTag, answerForm, bindAnswers, keepFocus };
 })();
