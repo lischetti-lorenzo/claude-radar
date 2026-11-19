@@ -1,0 +1,6 @@
+{
+  "accounts": [
+    { "name": "personal", "command": "claude", "configDir": "~/.claude" },
+    { "name": "trabajo", "command": "claude-work", "configDir": "~/.claude-work" }
+  ]
+}

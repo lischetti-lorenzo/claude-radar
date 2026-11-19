@@ -29,6 +29,25 @@ npm start         # opens the widget
 
 Claude sessions that were already running show up once you restart them.
 
+### More than one Claude account
+
+If you use several Claude accounts (each one is a `CLAUDE_CONFIG_DIR`, e.g. `alias claude-sb='CLAUDE_CONFIG_DIR="$HOME/.claude-sb" claude'`),
+list them in `accounts.json` at the project root (git-ignored; copy `accounts.example.json`, or let `npm run setup` create it with just the default account). The default account
+(`~/.claude`, the plain `claude` command) is always tracked, even if you leave it out:
+
+```json
+{
+  "accounts": [
+    { "name": "personal", "command": "claude",    "configDir": "~/.claude" },
+    { "name": "trabajo",  "command": "claude-sb", "configDir": "~/.claude-sb" }
+  ]
+}
+```
+
+Then run `npm run setup` again (it installs the hooks in each account's `settings.json`) and restart Radar.
+When more than one account is configured, every card shows which account the session belongs to.
+`npm run uninstall-hooks` removes the hooks from every listed account.
+
 ## Usage
 
 | Action | How |
@@ -64,6 +83,12 @@ session and streams it (Server-Sent Events) to the widget and the dashboard.
 - Projects are grouped by git repository. Worktrees are resolved to their main repo, and nested repos
   (e.g. `app/web`) are grouped under the outermost repo.
 - Session names and final messages are read from the session transcript.
+- The hooks also send the PID of the Claude Code process. Claude runs every Bash command in a shell that sources its
+  shell snapshot, as a child of that process, so Radar checks (`ps`, every 3 s) whether a session still has commands
+  running. If Claude ends its turn while a command keeps running (`run_in_background`), the session stays
+  **Working · En segundo plano** instead of "Done"; it turns "Done" when Claude finishes its next turn, or 15 s after the
+  command exits if Claude doesn't pick it back up. Long foreground commands aren't flagged as "no signal" either.
+  (macOS/Linux; hooks installed before this feature don't send the PID — run `npm run setup` again.)
 - The server only listens on localhost and rejects requests with a non-local `Host` header.
 
 ```
@@ -92,4 +117,6 @@ State and config are stored in `~/.claude-radar/`. Set the `RADAR_PORT` environm
 ## Known limitations
 
 - Claude Code doesn't fire a hook when you interrupt it with Esc, so an interrupted agent may keep showing
-  "Working" until your next prompt. Agents with no activity for 5+ minutes are flagged as "no signal".
+  "Working" until your next prompt. Agents with no activity for 5+ minutes (and no command running) are flagged as "no signal".
+- A command that never exits on its own (a dev server started in the background) keeps its session in "Working" until
+  you stop it or send a new prompt.

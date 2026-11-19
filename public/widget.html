@@ -104,6 +104,7 @@
   .title { font-weight: 600; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sub { color: var(--mut); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; gap: 5px; align-items: center; }
   .sub .p { color: var(--c); font-weight: 600; }
+  .acct { flex: none; font-size: 9.5px; font-weight: 650; letter-spacing: .02em; padding: 0 5px; line-height: 15px; border-radius: 4px; color: var(--mut); border: 1px solid rgba(255,255,255,.14); }
   .sub svg { width: 11px; height: 11px; display: inline; }
 
   .pill { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px; border-radius: 99px; font-size: 10.5px; font-weight: 650; }
@@ -271,7 +272,7 @@ function questionBox(a) {
 function card(a, now) {
   const c = R.color(a);
   const fresh = !seen.has(a.id); seen.add(a.id);
-  const stale = a.status === 'working' && now - a.updatedAt > 5 * 60e3;
+  const stale = R.isStale(a, now);
   let line = '';
   if (a.status === 'working') line = a.tool ? R.toolLine(a) : '<span class="tool-l">Pensando…</span>';
   else if (a.status === 'idle') line = 'Esperando tu primer mensaje';
@@ -284,7 +285,7 @@ function card(a, now) {
       <div class="av">${esc(initials(a.title || a.project))}</div>
       <div class="tt">
         <div class="title">${esc(a.title || 'Sesión nueva')}</div>
-        <div class="sub"><span class="p">${esc(a.project)}</span>${a.sub ? `<span>/ ${esc(a.sub)}</span>` : ''}${a.worktree ? `<span title="worktree">· wt ${esc(a.worktree)}</span>` : ''}${a.branch ? `<span>·</span><span>${ICONS.branch}</span><span>${esc(a.branch)}</span>` : ''}</div>
+        <div class="sub">${R.accountTag(a, state)}<span class="p">${esc(a.project)}</span>${a.sub ? `<span>/ ${esc(a.sub)}</span>` : ''}${a.worktree ? `<span title="worktree">· wt ${esc(a.worktree)}</span>` : ''}${a.branch ? `<span>·</span><span>${ICONS.branch}</span><span>${esc(a.branch)}</span>` : ''}</div>
       </div>
       ${pill(a)}
     </div>
