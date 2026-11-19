@@ -20,8 +20,22 @@ const PALETTE_SIZE = 10;
 const ENDED_TTL = 60 * 1000;
 const MAX_EVENTS = 60;
 
+const SETTINGS_FILE = path.join(DATA_DIR, 'server-settings.json');
+
 const bus = new EventEmitter();
 const agents = new Map();
+/* Questions (AskUserQuestion) whose hook is blocked waiting for an answer from Radar.
+   session id -> { res, toolUseId, input, at } */
+const pending = new Map();
+
+let settings = { answerInRadar: true };
+try { settings = { ...settings, ...JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) }; } catch { /* defaults */ }
+function setSettings(patch) {
+  if (typeof patch.answerInRadar === 'boolean') settings.answerInRadar = patch.answerInRadar;
+  try { fs.mkdirSync(DATA_DIR, { recursive: true }); fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2)); } catch { /* noop */ }
+  if (!settings.answerInRadar) for (const id of [...pending.keys()]) releaseToTerminal(id);
+  emit();
+}
 
 /* ---------------- persistence ---------------- */
 function load() {
@@ -258,6 +272,8 @@ function handleHook(p) {
   }
   const prev = a.status;
   a.updatedAt = now;
+  // the turn moved on without going through Radar: let go of any blocked question
+  if (ev === 'UserPromptSubmit' || ev === 'Stop' || ev === 'SessionEnd') releaseToTerminal(id);
   if (p.transcript_path) a.transcriptPath = p.transcript_path;
   if (ev === 'UserPromptSubmit' || ev === 'Stop') a.branch = readBranch(a.repo || a.root) || a.branch;
 
@@ -281,8 +297,10 @@ function handleHook(p) {
       const name = p.tool_name;
       const input = p.tool_input || {};
       if (name === 'AskUserQuestion') {
+        // both the generic hook and the blocking /hook/ask send this event: handle it once
+        if (a.status === 'question' && p.tool_use_id && a.question?.toolUseId === p.tool_use_id) break;
         a.status = 'question';
-        a.question = { kind: 'ask', at: now, questions: normalizeQuestions(input.questions) };
+        a.question = { kind: 'ask', at: now, toolUseId: p.tool_use_id || '', questions: normalizeQuestions(input.questions) };
         a.permission = null;
         addEvent(a, 'question', a.question.questions[0]?.question || 'Tiene una pregunta');
       } else if (name === 'ExitPlanMode') {
@@ -357,11 +375,72 @@ function handleHook(p) {
   emit();
 }
 
+/* ---------------- answering questions from Radar ---------------- */
+/* Called by the blocking AskUserQuestion hook. The response is held open until the user answers
+   from the widget/dashboard (or chooses the terminal); the hook prints whatever we send back. */
+function holdQuestion(p, res) {
+  const id = p.session_id;
+  if (!id || p.tool_name !== 'AskUserQuestion' || !settings.answerInRadar) { res.writeHead(200); return res.end(); }
+  releaseToTerminal(id); // a newer question replaces an older one
+  const entry = { res, toolUseId: p.tool_use_id || '', input: p.tool_input || {}, at: Date.now() };
+  pending.set(id, entry);
+  res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+  res.on('close', () => { // Claude cancelled the tool call or the hook timed out
+    if (pending.get(id) === entry) { pending.delete(id); emit(); }
+  });
+  handleHook(p);
+}
+
+function releaseToTerminal(id) {
+  const e = pending.get(id);
+  if (!e) return false;
+  pending.delete(id);
+  e.res.end(); // empty output: Claude Code shows its normal question prompt
+  emit();
+  return true;
+}
+
+/* answers: { [question text]: string } — multi-select answers are joined with ", " */
+function answerQuestion(id, answers) {
+  const e = pending.get(id);
+  if (!e) return { ok: false, error: 'La pregunta ya no está esperando respuesta' };
+  const qs = Array.isArray(e.input.questions) ? e.input.questions : [];
+  const clean = {};
+  for (const q of qs) {
+    const v = answers && typeof answers[q.question] === 'string' ? answers[q.question].trim() : '';
+    if (!v) return { ok: false, error: 'Faltan respuestas' };
+    clean[q.question] = v.slice(0, 4000);
+  }
+  pending.delete(id);
+  e.res.end(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'allow',
+      permissionDecisionReason: 'Respondido desde Claude Radar',
+      updatedInput: { ...e.input, answers: clean },
+    },
+  }));
+  const a = agents.get(id);
+  if (a) {
+    a.status = 'working';
+    a.question = null;
+    a.updatedAt = Date.now();
+    addEvent(a, 'answered', 'Respondiste desde Radar: ' + Object.values(clean).join(' · '));
+    bus.emit('transition', { agent: a, from: 'question', to: 'working' });
+  }
+  emit();
+  return { ok: true };
+}
+
 /* ---------------- broadcasting ---------------- */
 const clients = new Set();
 let emitTimer;
 function snapshot() {
-  return { now: Date.now(), agents: [...agents.values()].map(({ transcriptPath, ...rest }) => rest) };
+  return {
+    now: Date.now(),
+    settings,
+    agents: [...agents.values()].map(({ transcriptPath, ...rest }) => ({ ...rest, answerable: pending.has(rest.id) && rest.status === 'question' })),
+  };
 }
 function emit() {
   save();
@@ -409,6 +488,11 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
 
   try {
+    if (req.method === 'POST' && url.pathname === '/hook/ask') {
+      let p;
+      try { p = JSON.parse(await readBody(req)); } catch { res.writeHead(200); return res.end(); }
+      return holdQuestion(p, res);
+    }
     if (req.method === 'POST' && url.pathname === '/hook') {
       const body = await readBody(req);
       res.writeHead(200); res.end(); // respond fast, with no output for Claude
@@ -424,13 +508,20 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (req.method === 'POST' && url.pathname.startsWith('/api/')) {
+      // Block cross-site requests: a JSON content type forces a CORS preflight, and only our own pages may call us
+      const origin = req.headers.origin;
+      const okOrigin = !origin || origin === `http://127.0.0.1:${PORT}` || origin === `http://localhost:${PORT}`;
+      if (!okOrigin || !String(req.headers['content-type'] || '').startsWith('application/json')) { res.writeHead(403); return res.end(); }
       const body = JSON.parse((await readBody(req, 64 * 1024)) || '{}');
       if (url.pathname === '/api/open') return json(res, 200, { ok: openInEditor(body.id) });
-      if (url.pathname === '/api/dismiss') { agents.delete(body.id); emit(); return json(res, 200, { ok: true }); }
+      if (url.pathname === '/api/dismiss') { releaseToTerminal(body.id); agents.delete(body.id); emit(); return json(res, 200, { ok: true }); }
       if (url.pathname === '/api/clear-done') {
         for (const [k, a] of agents) if (a.status === 'done' || a.status === 'ended' || a.status === 'idle') agents.delete(k);
         emit(); return json(res, 200, { ok: true });
       }
+      if (url.pathname === '/api/answer') return json(res, 200, answerQuestion(body.id, body.answers));
+      if (url.pathname === '/api/answer-in-terminal') return json(res, 200, { ok: releaseToTerminal(body.id) });
+      if (url.pathname === '/api/settings') { setSettings(body); return json(res, 200, { ok: true, settings }); }
       if (url.pathname === '/api/dashboard') { bus.emit('open-dashboard'); return json(res, 200, { ok: true }); }
     }
     const file = ROUTES[url.pathname] || url.pathname.slice(1);
@@ -454,7 +545,7 @@ function start() {
   });
 }
 
-module.exports = { start, bus, openInEditor, snapshot, PORT, DATA_DIR };
+module.exports = { start, bus, openInEditor, snapshot, setSettings, getSettings: () => settings, PORT, DATA_DIR };
 
 if (require.main === module) {
   start().then(({ external }) => {

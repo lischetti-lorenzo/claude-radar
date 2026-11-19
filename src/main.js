@@ -85,11 +85,19 @@ function menuTemplate() {
     { type: 'separator' },
     { label: 'Notificaciones', type: 'checkbox', checked: cfg.notify, click: (m) => { cfg.notify = m.checked; saveCfg(); } },
     { label: 'Sonido', type: 'checkbox', checked: cfg.sound, enabled: cfg.notify, click: (m) => { cfg.sound = m.checked; saveCfg(); } },
+    { label: 'Responder preguntas desde Radar', type: 'checkbox', checked: radarSettings.answerInRadar !== false, click: (m) => setAnswerInRadar(m.checked) },
     { label: 'Abrir al iniciar sesión', type: 'checkbox', checked: autostartOn(), visible: process.platform === 'darwin', click: (m) => setAutostart(m.checked) },
     { type: 'separator' },
     { label: 'Recargar', click: () => win && win.reload() },
     { label: 'Salir de Claude Radar', role: 'quit' },
   ];
+}
+
+/* server-side settings (the server may be a separate process, so go through its API) */
+let radarSettings = { answerInRadar: true };
+function setAnswerInRadar(on) {
+  radarSettings.answerInRadar = on;
+  http.request(`${BASE}/api/settings`, { method: 'POST', headers: { 'Content-Type': 'application/json' } }).on('error', () => {}).end(JSON.stringify({ answerInRadar: on }));
 }
 
 function createTray() {
@@ -122,6 +130,7 @@ function listen() {
 }
 
 function onState(s) {
+  if (s.settings) radarSettings = s.settings;
   for (const a of s.agents) {
     const prev = lastStatus.get(a.id);
     lastStatus.set(a.id, a.status);

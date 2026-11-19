@@ -99,6 +99,17 @@
   .opt { display: flex; gap: 10px; padding: 8px 10px; border-radius: 9px; background: rgba(0,0,0,.25); border: 1px solid var(--line); font-size: 13px; }
   .opt b { flex: none; width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; font-size: 11px; background: rgba(255,255,255,.08); color: var(--mut); }
   .opt .od { color: var(--mut); font-size: 12px; }
+  .opt.pick { width: 100%; text-align: left; cursor: pointer; transition: border-color .12s, background .12s; }
+  .opt.pick:hover { border-color: rgba(251,191,36,.35); }
+  .opt.pick.on { border-color: var(--q); background: rgba(251,191,36,.10); }
+  .opt.pick.on b { background: var(--q); color: #1a1406; }
+  .other { width: 100%; background: rgba(0,0,0,.25); border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; color: var(--txt); font: inherit; font-size: 13px; outline: none; }
+  .other:focus { border-color: rgba(251,191,36,.45); }
+  .afoot { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+  .aerr { margin-top: 10px; font-size: 12.5px; color: var(--perm); }
+  .cta:disabled { opacity: .45; cursor: default; filter: none; }
+  .toggle { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--mut); cursor: pointer; user-select: none; }
+  .toggle input { accent-color: #FBBF24; }
   .qmulti { font-size: 11px; color: var(--mut); margin-bottom: 6px; }
   .qsep { height: 14px; }
   .perm { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; background: rgba(0,0,0,.3); border-radius: 8px; padding: 8px 10px; word-break: break-all; color: #F3DCC6; }
@@ -144,7 +155,8 @@
   <div class="toolbar">
     <div class="tabs" id="tabs"></div>
     <input class="search" id="q" placeholder="Buscar proyecto o sesión…">
-    <div class="layout ml" id="layout" title="Disposición de las tarjetas">
+    <label class="toggle ml" title="Cuando un agente te pregunta algo, podés responder desde acá o desde el widget. Si lo apagás, las preguntas aparecen solo en la terminal."><input type="checkbox" id="ans-radar"> Responder desde Radar</label>
+    <div class="layout" id="layout" title="Disposición de las tarjetas">
       <button data-layout="row" title="Lado a lado"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="3" width="3.6" height="10" rx="1"/><rect x="6.2" y="3" width="3.6" height="10" rx="1"/><rect x="10.9" y="3" width="3.6" height="10" rx="1"/></svg></button>
       <button data-layout="grid" title="Grilla"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg></button>
     </div>
@@ -179,6 +191,7 @@ function pill(a) {
 function question(a) {
   if (a.status === 'question' && a.question) {
     if (a.question.kind === 'plan') return `<div class="qbox"><div class="qh">Plan listo para aprobar</div><div class="md" style="margin-top:6px">${R.md(a.question.plan)}</div></div>`;
+    if (a.answerable) return `<div class="qbox">${R.answerForm(a)}</div>`;
     return `<div class="qbox">${a.question.questions.map((q) => `
       ${q.header ? `<div class="qh">${esc(q.header)}</div>` : ''}
       <div class="qq">${esc(q.question)}</div>
@@ -220,7 +233,8 @@ function card(a, now) {
     <div class="meta">${metas.join('')}</div>
     ${nowLine}${question(a)}${prompt}${last}${tl}
     <div class="foot">
-      <button class="cta ${R.needsYou(a) ? 'primary' : ''}" data-open="${a.id}">${ICONS.code}${R.needsYou(a) ? 'Responder en VS Code' : 'Abrir en VS Code'}</button>
+      ${a.answerable ? `<button class="cta" data-open="${a.id}">${ICONS.code}Abrir en VS Code</button>`
+        : `<button class="cta ${R.needsYou(a) ? 'primary' : ''}" data-open="${a.id}">${ICONS.code}${R.needsYou(a) ? 'Responder en VS Code' : 'Abrir en VS Code'}</button>`}
       ${a.status !== 'working' && !R.needsYou(a) ? `<button class="ghost ml" data-dismiss="${a.id}">Quitar</button>` : ''}
     </div>
   </article>`;
@@ -257,7 +271,7 @@ function render() {
     html += `<section><div class="sh"><h2>${esc(g.name)}</h2><span class="path">${esc(g.key)}</span><span class="mini">· ${g.agents.length} ${g.agents.length === 1 ? 'agente' : 'agentes'}</span></div>
       <div class="grid">${g.agents.map((a) => card(a, now)).join('')}</div></section>`;
   }
-  $('root').innerHTML = html;
+  R.keepFocus($('root'), html);
 }
 
 document.addEventListener('click', (e) => {
@@ -269,11 +283,13 @@ document.addEventListener('click', (e) => {
   if (t.dataset.more) { open.has(t.dataset.more) ? open.delete(t.dataset.more) : open.add(t.dataset.more); render(); }
   if (t.dataset.tl) { openTl.has(t.dataset.tl) ? openTl.delete(t.dataset.tl) : openTl.add(t.dataset.tl); render(); }
 });
+R.bindAnswers($('root'), render, (id) => state.agents.find((a) => a.id === id));
+$('ans-radar').onchange = (e) => R.api('/api/settings', { answerInRadar: e.target.checked });
 $('q').addEventListener('input', (e) => { query = e.target.value.toLowerCase().trim(); render(); });
 applyLayout();
 $('clear').onclick = () => R.api('/api/clear-done');
 
-R.stream((s) => { state = s; $('conn').classList.remove('off'); $('conn').lastElementChild.textContent = 'En vivo'; render(); },
+R.stream((s) => { state = s; if (s.settings) $('ans-radar').checked = !!s.settings.answerInRadar; $('conn').classList.remove('off'); $('conn').lastElementChild.textContent = 'En vivo'; render(); },
   (ok) => { if (!ok) { $('conn').classList.add('off'); $('conn').lastElementChild.textContent = 'Reconectando…'; } });
 setInterval(render, 5000);
 </script>

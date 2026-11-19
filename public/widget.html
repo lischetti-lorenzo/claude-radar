@@ -135,6 +135,20 @@
   .opt b { flex: none; width: 16px; height: 16px; border-radius: 5px; display: grid; place-items: center; font-size: 9.5px; background: rgba(255,255,255,.08); color: var(--mut); }
   .opt .od { color: var(--mut); font-size: 10.5px; }
   .qsep { height: 8px; }
+  .qbox.ans { max-height: 280px; }
+  .qmulti { font-size: 10px; color: var(--mut); margin: -3px 0 4px; }
+  .opts { display: grid; gap: 4px; }
+  .opt.pick { width: 100%; text-align: left; border: 1px solid var(--line); border-radius: 7px; padding: 5px 7px; background: rgba(255,255,255,.03); cursor: pointer; font: inherit; font-size: 11.5px; color: var(--txt); }
+  .opt.pick:hover { border-color: rgba(251,191,36,.35); }
+  .opt.pick.on { border-color: var(--q); background: rgba(251,191,36,.10); }
+  .opt.pick.on b { background: var(--q); color: #1a1406; }
+  .other { width: 100%; background: rgba(0,0,0,.25); border: 1px solid var(--line); border-radius: 7px; padding: 5px 7px; color: var(--txt); font: inherit; font-size: 11.5px; outline: none; }
+  .other:focus { border-color: rgba(251,191,36,.45); }
+  .afoot { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+  .aerr { margin-top: 6px; font-size: 11px; color: var(--perm); }
+  .cta.primary { background: var(--q); color: #1a1406; } .cta.primary:hover { filter: brightness(1.08); }
+  .cta:disabled { opacity: .45; cursor: default; filter: none; }
+  .ghost { font-size: 11px; color: var(--mut); padding: 4px 6px; border-radius: 6px; } .ghost:hover { color: var(--txt); background: rgba(255,255,255,.05); }
   .perm { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 10.5px; color: #E5D3C0; word-break: break-all; }
   .qfoot { margin-top: 8px; display: flex; justify-content: flex-end; }
   .cta { display: inline-flex; gap: 5px; align-items: center; height: 24px; padding: 0 9px; border-radius: 7px; font-size: 11px; font-weight: 600; background: rgba(255,255,255,.08); color: var(--txt); }
@@ -202,7 +216,7 @@ $('b-dash').onclick = () => host ? host.openDashboard() : window.open('/', '_bla
 $('b-menu').onclick = () => host ? host.menu() : window.open('/', '_blank');
 $('prev').onclick = () => move(-1);
 $('next').onclick = () => move(1);
-document.addEventListener('keydown', (e) => { if (e.key === 'ArrowLeft') move(-1); if (e.key === 'ArrowRight') move(1); });
+document.addEventListener('keydown', (e) => { if (e.target.closest && e.target.closest('input, textarea')) return; if (e.key === 'ArrowLeft') move(-1); if (e.key === 'ArrowRight') move(1); });
 
 function move(d) {
   const i = groups.findIndex((g) => g.key === cur);
@@ -235,6 +249,8 @@ function questionBox(a) {
     let inner = '';
     if (a.question.kind === 'plan') {
       inner = `<span class="qh">Plan para aprobar</span><div class="msg" style="-webkit-line-clamp:6">${R.md(a.question.plan)}</div>`;
+    } else if (a.answerable) {
+      return `<div class="qbox ans">${R.answerForm(a)}</div>`;
     } else {
       inner = a.question.questions.map((q) =>
         `${q.header ? `<span class="qh">${esc(q.header)}</span>` : ''}<div class="qq">${esc(q.question)}</div>` +
@@ -311,7 +327,7 @@ function render() {
   $('prev').innerHTML = ICONS.left + (groups.slice(0, i).some((x) => x.attention) ? '<span class="alert"></span>' : '');
   $('next').innerHTML = ICONS.right + (groups.slice(i + 1).some((x) => x.attention) ? '<span class="alert"></span>' : '');
   const scroll = list.scrollTop;
-  list.innerHTML = g.agents.map((a) => card(a, now)).join('');
+  R.keepFocus(list, g.agents.map((a) => card(a, now)).join(''));
   list.scrollTop = scroll;
   report();
 }
@@ -324,6 +340,8 @@ $('list').addEventListener('click', (e) => {
   const o = e.target.closest('[data-open]');
   if (o) R.api('/api/open', { id: o.dataset.open });
 });
+
+R.bindAnswers($('list'), render, (id) => state.agents.find((a) => a.id === id));
 
 function report() {
   if (!host) return;

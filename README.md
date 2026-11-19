@@ -6,6 +6,7 @@ A floating macOS widget (top-right corner of your screen) plus a local web dashb
 - See which agents are **working**, which ones are **asking you something**, which need **permission**, and which are **done**.
 - Switch between projects with **‹ ›**; each project shows its active agents.
 - Questions (`AskUserQuestion`), permission prompts and plans waiting for approval are shown inline, with all their options.
+- **Answer questions right from the widget or the dashboard**: pick an option (or type your own answer) and Claude continues.
 - Every agent gets its own color and shows the project, session name, git branch, current tool and elapsed time.
 - Height-limited widget so it never takes over your screen; open the full dashboard with one click.
 - Native macOS notifications when an agent asks something or finishes.
@@ -33,6 +34,9 @@ Claude sessions that were already running show up once you restart them.
 | Action | How |
 | --- | --- |
 | Switch project | **‹ ›** buttons or the arrow keys. Yellow dots mark projects with pending questions. |
+| Answer a question | Pick the option(s) (or type another answer) and press **Enviar respuesta** — from the widget or the dashboard |
+| Answer it in the terminal instead | **Responder en la terminal** on the question; Claude shows its usual prompt |
+| Turn off answering from Radar | **⋯ → Responder preguntas desde Radar**, or the **Responder desde Radar** checkbox in the dashboard |
 | Open a project in VS Code | Click an agent card |
 | Full dashboard | **⤢** button, or open <http://127.0.0.1:7337>. Cards of each project are shown side by side; switch to a wrapping grid with the layout toggle next to the search box |
 | Collapse the widget | **–** button |
@@ -51,6 +55,12 @@ Each hook pipes its JSON payload with `curl` to a local server on `127.0.0.1:733
 session and streams it (Server-Sent Events) to the widget and the dashboard.
 
 - If the widget isn't running, the `curl` call fails silently and Claude Code keeps working normally.
+- `AskUserQuestion` has an extra `PreToolUse` hook that keeps its request open until you answer in Radar; the answer goes
+  back to Claude as the tool's `answers` (via `updatedInput`). While Radar holds a question, the terminal shows the hook
+  running instead of the question. Choose **Responder en la terminal** to get the normal prompt back; it also comes back
+  automatically if Radar isn't running, the option is off, or nobody answers within an hour.
+  If you installed the hooks before this feature existed, run `npm run setup` again.
+- Only Radar's own pages can call its API (JSON requests with a local `Origin`), so a web page can't answer for you.
 - Projects are grouped by git repository. Worktrees are resolved to their main repo, and nested repos
   (e.g. `app/web`) are grouped under the outermost repo.
 - Session names and final messages are read from the session transcript.

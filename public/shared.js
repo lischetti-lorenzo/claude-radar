@@ -101,6 +101,105 @@
     connect();
   }
 
+  /* ---------- answering questions (AskUserQuestion) from Radar ----------
+     Drafts survive re-renders: the UIs rebuild their HTML on every state update. */
+  const drafts = new Map(); // agent id -> { key, sel: number[][], other: string[], sending, error }
+
+  function draftFor(a) {
+    const key = a.question.toolUseId || String(a.question.at);
+    let d = drafts.get(a.id);
+    if (!d || d.key !== key) {
+      d = { key, sel: a.question.questions.map(() => []), other: a.question.questions.map(() => ''), sending: false, error: '' };
+      drafts.set(a.id, d);
+    }
+    return d;
+  }
+
+  function answerOf(q, d, i) {
+    const other = (d.other[i] || '').trim();
+    if (other) return other;
+    return d.sel[i].map((k) => q.options[k] && q.options[k].label).filter(Boolean).join(', ');
+  }
+
+  /* HTML for an answerable question. Uses classes .qh .qq .qmulti .opts .opt .pick .other .afoot .cta .ghost */
+  function answerForm(a) {
+    const d = draftFor(a);
+    const qs = a.question.questions;
+    const ready = qs.every((q, i) => answerOf(q, d, i));
+    return qs.map((q, i) => `
+      ${q.header ? `<div class="qh">${esc(q.header)}</div>` : ''}
+      <div class="qq">${esc(q.question)}</div>
+      ${q.multiSelect ? '<div class="qmulti">Podés elegir varias</div>' : ''}
+      <div class="opts">${q.options.map((o, k) => {
+        const on = !(d.other[i] || '').trim() && d.sel[i].includes(k);
+        return `<button type="button" class="opt pick${on ? ' on' : ''}" data-pick="${esc(a.id)}|${i}|${k}" aria-pressed="${on}"><b>${on ? '✓' : k + 1}</b><div>${esc(o.label)}${o.description ? `<div class="od">${esc(o.description)}</div>` : ''}</div></button>`;
+      }).join('')}
+        <input class="other" data-other="${esc(a.id)}|${i}" placeholder="Otra respuesta…" value="${esc(d.other[i])}" maxlength="2000">
+      </div>`).join('<div class="qsep"></div>') + `
+      ${d.error ? `<div class="aerr">${esc(d.error)}</div>` : ''}
+      <div class="afoot">
+        <button type="button" class="cta primary" data-send="${esc(a.id)}" ${ready && !d.sending ? '' : 'disabled'}>${d.sending ? 'Enviando…' : 'Enviar respuesta'}</button>
+        <button type="button" class="ghost" data-term="${esc(a.id)}" title="Claude te va a hacer la pregunta en la terminal">Responder en la terminal</button>
+      </div>`;
+  }
+
+  /* Wire the form inside `root`. `rerender` redraws the UI; `getAgent(id)` returns the current agent. */
+  function bindAnswers(root, rerender, getAgent) {
+    root.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-pick],[data-send],[data-term]');
+      if (!b || !root.contains(b)) return;
+      e.stopPropagation();
+      if (b.dataset.pick) {
+        const [id, i, k] = b.dataset.pick.split('|');
+        const a = getAgent(id); if (!a || !a.question) return;
+        const d = draftFor(a), q = a.question.questions[+i], n = +k;
+        d.other[+i] = ''; d.error = '';
+        if (q.multiSelect) d.sel[+i] = d.sel[+i].includes(n) ? d.sel[+i].filter((x) => x !== n) : [...d.sel[+i], n];
+        else d.sel[+i] = [n];
+        return rerender();
+      }
+      if (b.dataset.term) { api('/api/answer-in-terminal', { id: b.dataset.term }); return; }
+      if (b.dataset.send) {
+        const a = getAgent(b.dataset.send); if (!a || !a.question) return;
+        const d = draftFor(a);
+        const answers = {};
+        a.question.questions.forEach((q, i) => { answers[q.question] = answerOf(q, d, i); });
+        d.sending = true; d.error = ''; rerender();
+        try {
+          const r = await (await api('/api/answer', { id: a.id, answers })).json();
+          if (!r.ok) d.error = r.error || 'No se pudo enviar';
+        } catch { d.error = 'No se pudo enviar'; }
+        d.sending = false; rerender();
+      }
+    });
+    root.addEventListener('input', (e) => {
+      const el = e.target.closest('[data-other]'); if (!el) return;
+      const [id, i] = el.dataset.other.split('|');
+      const a = getAgent(id); if (!a || !a.question) return;
+      const d = draftFor(a);
+      const had = !!d.other[+i].trim();
+      d.other[+i] = el.value; d.error = '';
+      if (had !== !!el.value.trim()) rerender(); // typed text overrides the selected options
+      else { const s = root.querySelector(`[data-send="${CSS.escape(id)}"]`); if (s) s.disabled = !a.question.questions.every((q, j) => answerOf(q, d, j)); }
+    });
+    root.addEventListener('keydown', (e) => {
+      const el = e.target.closest('[data-other]');
+      if (el && e.key === 'Enter') { const s = root.querySelector(`[data-send="${CSS.escape(el.dataset.other.split('|')[0])}"]`); if (s && !s.disabled) s.click(); }
+    });
+  }
+
+  /* Re-render `el` without losing focus/caret on a text input (inputs are identified by data-other). */
+  function keepFocus(el, html) {
+    const f = document.activeElement;
+    const key = f && el.contains(f) && f.dataset && f.dataset.other;
+    const s = key ? [f.selectionStart, f.selectionEnd] : null;
+    el.innerHTML = html;
+    if (key) {
+      const n = el.querySelector(`[data-other="${CSS.escape(key)}"]`);
+      if (n) { n.focus(); try { n.setSelectionRange(s[0], s[1]); } catch {} }
+    }
+  }
+
   const api = (p, body) => fetch(p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
 
   function toolLine(a) {
@@ -108,5 +207,5 @@
     return `<span class="tool-l">${esc(a.tool.label)}</span>${a.tool.detail ? ` <span class="tool-d">${esc(a.tool.detail)}</span>` : ''}`;
   }
 
-  window.Radar = { PALETTE, STATUS, ICONS, esc, ago, dur, md, color, needsYou, groupByProject, stream, api, toolLine };
+  window.Radar = { PALETTE, STATUS, ICONS, esc, ago, dur, md, color, needsYou, groupByProject, stream, api, toolLine, answerForm, bindAnswers, keepFocus };
 })();
