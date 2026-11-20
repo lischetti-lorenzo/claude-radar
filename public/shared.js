@@ -200,8 +200,8 @@
     }
   }
 
-  /* "no signal for a while" — unless a command is still running, which is a perfectly good reason to be quiet */
-  const isStale = (a, now = Date.now()) => a.status === 'working' && !(a.running && a.running.length) && now - a.updatedAt > 5 * 60e3;
+  /* "no signal for a while" — unless a command or a subagent is still running, which is a perfectly good reason to be quiet */
+  const isStale = (a, now = Date.now()) => a.status === 'working' && !(a.running && a.running.length) && !(a.subagents && Object.keys(a.subagents).length) && now - a.updatedAt > 5 * 60e3;
 
   /* Account chip, only when more than one Claude account is configured or seen */
   function accountTag(a, state) {

@@ -69,7 +69,7 @@ To give a session a nice name, use `/rename` inside Claude Code; otherwise your 
 ## How it works
 
 Claude Code runs [hooks](https://docs.claude.com/en/docs/claude-code/hooks) on `SessionStart`, `UserPromptSubmit`,
-`PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SubagentStop`, `PreCompact` and `SessionEnd`.
+`PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SubagentStart`, `SubagentStop`, `PreCompact` and `SessionEnd`.
 Each hook pipes its JSON payload with `curl` to a local server on `127.0.0.1:7337`, which keeps the state of every
 session and streams it (Server-Sent Events) to the widget and the dashboard.
 

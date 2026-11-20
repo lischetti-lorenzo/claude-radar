@@ -52,6 +52,7 @@ function load() {
         Object.assign(a, { root: r.root, repo: r.repo, sub: r.sub, worktree: r.worktree, project: path.basename(r.root) || a.project });
       }
       a.running = a.running || [];
+      a.subagents = a.subagents || {};
       agents.set(a.id, a);
     }
   } catch { /* first run */ }
@@ -261,6 +262,7 @@ function newAgent(p) {
     running: [],     // Bash commands still running in this session
     bg: false,       // the turn ended but a command keeps running
     bgEmptyAt: 0,
+    subagents: {},   // live subagents (background ones keep the session busy after its turn ends): id -> { type, desc, at }
     events: [],
   };
 }
@@ -330,10 +332,51 @@ function runningFor(a, table) {
   return out;
 }
 
-const bgTool = (running) => ({ name: 'Bash', label: 'En segundo plano', detail: running[0].cmd + (running.length > 1 ? ` (+${running.length - 1})` : '') });
+/* ---------------- subagents ----------------
+   A background subagent (Agent with run_in_background, or one resumed with SendMessage) keeps working after the
+   main turn's Stop, and Claude picks the turn back up when it hands back. Its hooks carry agent_id, it ends with
+   SubagentStop, and it writes <session>/subagents/agent-<id>.jsonl next to the session transcript. */
+const SUB_STALE = 20 * 60 * 1000; // no hook and no transcript write for this long: assume it died without SubagentStop
+
+function noteSubagent(a, id, info = {}) {
+  if (!id) return;
+  a.subNames = a.subNames || {}; // remembered after it ends, so a SendMessage resume keeps its name
+  const cur = { ...a.subNames[id], ...a.subagents[id] };
+  const s = { type: info.type || cur.type || '', desc: info.desc || cur.desc || '' };
+  a.subagents[id] = { ...s, at: Date.now() };
+  a.subNames[id] = s;
+  const ids = Object.keys(a.subNames);
+  if (ids.length > 20) delete a.subNames[ids[0]];
+}
+const liveSubagents = (a) => Object.entries(a.subagents || {}).map(([id, s]) => ({ id, ...s }));
+function subagentFile(a, id) {
+  if (!a.transcriptPath) return '';
+  return path.join(path.dirname(a.transcriptPath), a.id, 'subagents', `agent-${id}.jsonl`);
+}
+/* Drops subagents that went quiet for too long (killed, or a SubagentStop Radar never got). */
+function pruneSubagents(a, now) {
+  let changed = false;
+  for (const s of liveSubagents(a)) {
+    if (now - s.at < SUB_STALE) continue;
+    let mtime = 0;
+    try { mtime = fs.statSync(subagentFile(a, s.id)).mtimeMs; } catch { /* no transcript */ }
+    if (now - mtime < SUB_STALE) continue;
+    delete a.subagents[s.id];
+    changed = true;
+  }
+  return changed;
+}
+
+const subLabel = (s) => s.desc || s.type || 'Subagente';
+function bgTool(running, subs = []) {
+  const items = [...running.map((x) => x.cmd), ...subs.map(subLabel)];
+  const label = running.length ? 'En segundo plano' : subs.length > 1 ? 'Subagentes trabajando' : 'Subagente trabajando';
+  return { name: running.length ? 'Bash' : 'Agent', label, detail: items[0] + (items.length > 1 ? ` (+${items.length - 1})` : '') };
+}
 
 function finishTurn(a, now) {
   a.status = 'done';
+  a.subagents = {};
   a.doneAt = now;
   a.bg = false; a.bgEmptyAt = 0;
   a.tool = null; a.question = null; a.permission = null;
@@ -341,7 +384,7 @@ function finishTurn(a, now) {
 
 function pollRunning() {
   // done sessions are watched too: one may have ended its turn with a command still running
-  const watch = [...agents.values()].filter((x) => x.status !== 'ended' && (x.status === 'done' || x.bg || x.running.length || (x.status === 'working' && x.tool?.name === 'Bash')));
+  const watch = [...agents.values()].filter((x) => x.status !== 'ended' && (x.status === 'done' || x.bg || x.running.length || liveSubagents(x).length || (x.status === 'working' && x.tool?.name === 'Bash')));
   if (!watch.length) return;
   const table = psTable();
   if (!table) return;
@@ -355,19 +398,22 @@ function pollRunning() {
     const r = runningFor(a, table);
     const running = r || [];
     if (running.map((x) => x.pid).join() !== a.running.map((x) => x.pid).join()) { a.running = running; changed = true; }
+    if (r === null && a.pid && liveSubagents(a).length) { a.subagents = {}; changed = true; } // the claude process is gone
+    if (pruneSubagents(a, now)) changed = true;
+    const subs = liveSubagents(a);
     if (a.status === 'done' && running.length) {
       // marked done (e.g. before Radar knew its PID) but a command is still running
       a.status = 'working'; a.bg = true; a.bgEmptyAt = 0;
-      a.tool = bgTool(running);
+      a.tool = bgTool(running, subs);
       addEvent(a, 'note', 'Esperando un proceso: ' + a.tool.detail);
       bus.emit('transition', { agent: a, from: 'done', to: 'working' });
       changed = true;
       continue;
     }
     if (!a.bg) continue;
-    if (running.length) {
+    if (running.length || subs.length) {
       a.bgEmptyAt = 0;
-      const t = bgTool(running);
+      const t = bgTool(running, subs);
       if (t.detail !== a.tool?.detail) { a.tool = t; changed = true; }
     } else if (r === null || (a.bgEmptyAt && now - a.bgEmptyAt > BG_GRACE)) {
       // Claude didn't come back after the command ended (or the session is gone): the turn is over
@@ -393,8 +439,11 @@ function stillRunning(a) {
   if (!a.pid || !table.has(a.pid)) a.pid = sessionPids(table).get(a.id) || a.pid;
   const r = runningFor(a, table);
   a.running = r || [];
+  if (r === null && a.pid) a.subagents = {}; // the claude process is gone
   return a.running;
 }
+/* Is the session still busy after its turn: commands running or background subagents working? */
+const stillBusy = (a) => stillRunning(a).length + liveSubagents(a).length > 0;
 
 /* ---------------- hook handling ---------------- */
 function handleHook(p, meta = {}) {
@@ -414,8 +463,11 @@ function handleHook(p, meta = {}) {
   a.updatedAt = now;
   if (meta.account) a.account = meta.account;
   if (meta.pid) a.pid = meta.pid;
+  // hooks fired from inside a subagent carry its id; SubagentStop retires it
+  const sub = p.agent_id || '';
+  if (sub && ev !== 'SubagentStop') noteSubagent(a, sub, { type: p.agent_type });
   // Claude is back on this session's main turn: it's no longer just waiting on a command
-  if (ev === 'UserPromptSubmit' || ev === 'PreToolUse' || ev === 'Stop' || ev === 'SessionEnd') { a.bg = false; a.bgEmptyAt = 0; }
+  if (!sub && (ev === 'UserPromptSubmit' || ev === 'PreToolUse' || ev === 'Stop' || ev === 'SessionEnd')) { a.bg = false; a.bgEmptyAt = 0; }
   // the turn moved on without going through Radar: let go of any blocked question
   if (ev === 'UserPromptSubmit' || ev === 'Stop' || ev === 'SessionEnd') releaseToTerminal(id);
   if (p.transcript_path) a.transcriptPath = p.transcript_path;
@@ -451,6 +503,15 @@ function handleHook(p, meta = {}) {
         a.status = 'question';
         a.question = { kind: 'plan', at: now, plan: String(input.plan || '').slice(0, 8000) };
         addEvent(a, 'question', 'Plan listo para aprobar');
+      } else if (sub && (a.bg || prev === 'done')) {
+        // a background subagent working after the main turn ended
+        const t = summarizeTool(name, input, a.cwd);
+        a.status = 'working'; a.bg = true; a.bgEmptyAt = 0;
+        a.question = null; a.permission = null;
+        a.tool = { name: 'Agent', label: subLabel(a.subagents[sub]), detail: t.label + (t.detail ? ' · ' + t.detail : '') };
+        a.toolCount++;
+        if (prev === 'done') addEvent(a, 'subagent', 'Un subagente sigue trabajando: ' + subLabel(a.subagents[sub]));
+        addEvent(a, 'tool', a.tool.label + ' · ' + a.tool.detail);
       } else {
         if (a.status !== 'working') { a.status = 'working'; if (!a.taskStartedAt || prev === 'done' || prev === 'idle') a.taskStartedAt = now; }
         a.question = null; a.permission = null;
@@ -462,13 +523,25 @@ function handleHook(p, meta = {}) {
       break;
     }
 
-    case 'PostToolUse':
+    case 'SubagentStart':
+      noteSubagent(a, p.agent_id, { type: p.agent_type });
+      break;
+
+    case 'PostToolUse': {
+      // a subagent launched in the background, or one resumed with SendMessage, keeps going after this turn
+      const r = p.tool_response && typeof p.tool_response === 'object' ? p.tool_response : {};
+      if ((p.tool_name === 'Agent' || p.tool_name === 'Task') && r.isAsync && r.agentId) {
+        noteSubagent(a, r.agentId, { type: p.tool_input?.subagent_type, desc: r.description || p.tool_input?.description });
+      } else if (p.tool_name === 'SendMessage' && r.resumedAgentId) {
+        noteSubagent(a, r.resumedAgentId);
+      }
       if (a.status === 'question' || a.status === 'permission') {
         addEvent(a, 'answered', a.status === 'question' ? 'Respondiste' : 'Permiso concedido');
         a.status = 'working';
         a.question = null; a.permission = null;
       }
       break;
+    }
 
     case 'Notification': {
       const msg = String(p.message || '');
@@ -482,7 +555,7 @@ function handleHook(p, meta = {}) {
         }
       } else if (nt === 'idle_prompt') {
         // idle at the prompt but with a command still running (e.g. run_in_background): not done yet
-        if (a.status !== 'question' && a.status !== 'permission' && a.status !== 'done' && !a.bg && !stillRunning(a).length) { a.status = 'done'; a.doneAt = a.doneAt || now; }
+        if (a.status !== 'question' && a.status !== 'permission' && a.status !== 'done' && !a.bg && !stillBusy(a)) { a.status = 'done'; a.doneAt = a.doneAt || now; }
       } else if (msg) {
         addEvent(a, 'note', msg);
       }
@@ -493,13 +566,14 @@ function handleHook(p, meta = {}) {
       if (p.last_assistant_message) a.lastMessage = String(p.last_assistant_message).slice(0, 6000);
       readTranscript(a, { last: !p.last_assistant_message });
       const running = stillRunning(a);
-      if (running.length) {
-        // the turn ended but a command keeps running: Claude picks it up again when the command finishes
+      const subs = liveSubagents(a);
+      if (running.length || subs.length) {
+        // the turn ended but a command or a background subagent keeps going: Claude picks the turn up again when it's done
         a.status = 'working';
         a.bg = true;
         a.question = null; a.permission = null;
-        a.tool = bgTool(running);
-        addEvent(a, 'note', 'Esperando un proceso: ' + a.tool.detail);
+        a.tool = bgTool(running, subs);
+        addEvent(a, 'note', (running.length ? 'Esperando un proceso: ' : 'Esperando a un subagente: ') + a.tool.detail);
       } else {
         finishTurn(a, now);
         addEvent(a, 'done', 'Terminó');
@@ -507,9 +581,14 @@ function handleHook(p, meta = {}) {
       break;
     }
 
-    case 'SubagentStop':
-      addEvent(a, 'subagent', 'Un subagente terminó');
+    case 'SubagentStop': {
+      const s = a.subagents[sub];
+      delete a.subagents[sub];
+      addEvent(a, 'subagent', s && (s.desc || s.type) ? `Un subagente terminó: ${subLabel(s)}` : 'Un subagente terminó');
+      // if the turn already ended, pollRunning closes it after BG_GRACE unless Claude picks it back up
+      if (a.bg && !liveSubagents(a).length && !a.running.length) { a.bgEmptyAt = a.bgEmptyAt || now; a.tool = { name: 'Agent', label: 'Subagente terminó', detail: 'esperando que Claude siga…' }; }
       break;
+    }
 
     case 'PreCompact':
       addEvent(a, 'note', 'Compactando contexto…');
@@ -517,7 +596,7 @@ function handleHook(p, meta = {}) {
 
     case 'SessionEnd':
       a.status = 'ended';
-      a.question = null; a.permission = null; a.tool = null; a.running = [];
+      a.question = null; a.permission = null; a.tool = null; a.running = []; a.subagents = {};
       addEvent(a, 'end', 'Sesión cerrada');
       setTimeout(() => {
         const cur = agents.get(id);
