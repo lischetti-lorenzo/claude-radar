@@ -25,6 +25,7 @@ function eventsFor(account) {
     PostToolUse: [{ matcher: '*', hooks: [notify] }],
     Notification: [{ hooks: [notify] }],
     Stop: [{ hooks: [notify] }],
+    SubagentStart: [{ hooks: [notify] }],
     SubagentStop: [{ hooks: [notify] }],
     PreCompact: [{ hooks: [notify] }],
     SessionEnd: [{ hooks: [notify] }],
